@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Webcam Difference</title>
+    <style>
+        body { margin: 0; overflow: hidden; display: flex; justify-content: center; align-items: center; min-height: 100vh; background-color: #333; }
+        canvas { border: 1px solid #555; max-width: 90vw; max-height: 90vh; }
+        video { display: none; /* Hide the video element, we'll draw from it */ }
+        #controls { position: fixed; top: 8px; left: 8px; z-index: 10; color: #fff; font-family: monospace; }
+    </style>
+</head>
+<body>
+    <video id="webcamVideo" autoplay playsinline></video>
+    <canvas id="webglCanvas"></canvas>
+
+    <!-- Inserted: user-trigger (helps avoid some automatic permission issues) and a status area -->
+    <div id="controls">
+        <button id="startBtn">Start Camera</button>
+        <span id="status"></span>
+    </div>
+
+    <script id="vertex-shader" type="x-shader/x-vertex">
+        #version 300 es
+        in vec4 a_position;
+        in vec2 a_texCoord;
+        out vec2 v_texCoord;
+
+        void main() {
+            gl_Position = a_position;
+            v_texCoord = a_texCoord;
+        }
+    </script>
+
+    <script id="copy-fragment-shader" type="x-shader/x-fragment">
+        #version 300 es
+        precision mediump float;
+        uniform sampler2D u_image;
+        in vec2 v_texCoord;
+        out vec4 fragColor;
+
+        void main() {
+            fragColor = texture(u_image, v_texCoord);
+        }
+    </script>
+
+    <script id="difference-fragment-shader" type="x-shader/x-fragment">
+        #version 300 es
+        precision mediump float;
+        uniform sampler2D u_imageA; // Current frame
+        uniform sampler2D u_imageB; // Previous frame
+        in vec2 v_texCoord;
+        out vec4 fragColor;
+
+        void main() {
+            vec4 colorA = texture(u_imageA, v_texCoord);
+            vec4 colorB = texture(u_imageB, v_texCoord);
+
+            // Calculate the absolute difference for each color channel (RGBA)
+            // You might want to experiment with different difference metrics:
+            // - abs(colorA.rgb - colorB.rgb) for just color, ignoring alpha
+            // - length(colorA.rgb - colorB.rgb) for scalar magnitude
+            // - dot(abs(colorA.rgb - colorB.rgb), vec3(0.2126, 0.7152, 0.0722)) for grayscale luminance difference
+            vec4 difference = abs(colorA - colorB);
+
+            // If you want to visualize changes more clearly (e.g., as white on black)
+            // float total_diff = (difference.r + difference.g + difference.b) / 3.0; // Average difference
+            // fragColor = vec4(vec3(total_diff), 1.0); // Output as grayscale
+
+            fragColor = difference; // Output raw absolute difference
+        }
+    </script>
+
+    <script src="script.js"></script>
+</body>
+</html>
