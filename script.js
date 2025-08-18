@@ -246,7 +246,6 @@ function render() {
 
 // Webcam start logic with error handling
 (() => {
-	// Elements
 	const startBtn = document.getElementById('startBtn');
 	const statusEl = document.getElementById('status');
 	const video = document.getElementById('webcamVideo');
@@ -329,25 +328,24 @@ function render() {
 				log('No camera found on this device.');
 			}
 
-				console.warn('video.play error:', e);
-			}f (!stream) {
-			log('Camera started.');
-					log('Attempting legacy getUserMedia fallback...');
-			// Initialize WebGL and start render loop oncents);
-			if (!gl) initWebGL();{
-			if (!isStarted) {Legacy getUserMedia failed:', legacyErr);
-				isStarted = true;lert('Camera error: ' + (legacyErr.message || legacyErr));
-				render();ble to access camera. See console for details.');
-			}}
-		};
-	}}
+			// Try legacy fallback if still no stream
+			if (!stream) {
+				try {
+					stream = await fallbackGetUserMedia(constraints);
+				} catch (legacyErr) {
+					console.warn('Legacy getUserMedia failed:', legacyErr);
+				}
+			}
+		}
 
-	// Wire UIam) return;
-	if (startBtn) startBtn.addEventListener('click', startWebcam);
-		// Attach and start
-	// Optional: auto-start on page load (disabled)
-	// window.addEventListener('load', () => { /* startWebcam(); */ });
-})();Set global videoElement so render/initWebGL can use it
+		if (!stream) {
+			log('Could not access camera. See console for details.');
+			return;
+		}
+
+		// Attach stream to video element and start playback
+		video.srcObject = stream;
+		// Set global videoElement so render/initWebGL can use it
 		videoElement = video;
 
 		video.onloadedmetadata = async () => {
@@ -362,7 +360,7 @@ function render() {
 			if (!gl) initWebGL();
 			if (!isStarted) {
 				isStarted = true;
-				render();
+				requestAnimationFrame(render);
 			}
 		};
 	}
