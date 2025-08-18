@@ -48,14 +48,14 @@ function setupPlane(gl) {
          1,  1, // Top-right
     ]);
 
-    // Texture coordinates (match vertices)
+    // Texture coordinates (conventional mapping: 0,0 = bottom-left)
     const texCoords = new Float32Array([
-        0, 1, // Bottom-left (in texture space, y is often flipped)
-        1, 1, // Bottom-right
-        0, 0, // Top-left
-        0, 0, // Top-left
-        1, 1, // Bottom-right
-        1, 0, // Top-right
+        0, 0, // Bottom-left
+        1, 0, // Bottom-right
+        0, 1, // Top-left
+        0, 1, // Top-left
+        1, 0, // Bottom-right
+        1, 1, // Top-right
     ]);
 
     vao = gl.createVertexArray();
@@ -64,21 +64,40 @@ function setupPlane(gl) {
     const positionBuffer = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
     gl.bufferData(gl.ARRAY_BUFFER, positions, gl.STATIC_DRAW);
-    gl.enableVertexAttribArray(gl.getAttribLocation(programDifference, 'a_position'));
-    gl.vertexAttribPointer(gl.getAttribLocation(programDifference, 'a_position'), 2, gl.FLOAT, false, 0, 0);
 
     const texCoordBuffer = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, texCoordBuffer);
     gl.bufferData(gl.ARRAY_BUFFER, texCoords, gl.STATIC_DRAW);
-    gl.enableVertexAttribArray(gl.getAttribLocation(programDifference, 'a_texCoord'));
-    gl.vertexAttribPointer(gl.getAttribLocation(programDifference, 'a_texCoord'), 2, gl.FLOAT, false, 0, 0);
 
-    // Also set up for the copy program
+    // Setup attributes for programDifference
+    gl.useProgram(programDifference);
+    const posLocDiff = gl.getAttribLocation(programDifference, 'a_position');
+    if (posLocDiff >= 0) {
+        gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
+        gl.enableVertexAttribArray(posLocDiff);
+        gl.vertexAttribPointer(posLocDiff, 2, gl.FLOAT, false, 0, 0);
+    }
+    const texLocDiff = gl.getAttribLocation(programDifference, 'a_texCoord');
+    if (texLocDiff >= 0) {
+        gl.bindBuffer(gl.ARRAY_BUFFER, texCoordBuffer);
+        gl.enableVertexAttribArray(texLocDiff);
+        gl.vertexAttribPointer(texLocDiff, 2, gl.FLOAT, false, 0, 0);
+    }
+
+    // Setup attributes for programCopy
     gl.useProgram(programCopy);
-    gl.enableVertexAttribArray(gl.getAttribLocation(programCopy, 'a_position'));
-    gl.vertexAttribPointer(gl.getAttribLocation(programCopy, 'a_position'), 2, gl.FLOAT, false, 0, 0);
-    gl.enableVertexAttribArray(gl.getAttribLocation(programCopy, 'a_texCoord'));
-    gl.vertexAttribPointer(gl.getAttribLocation(programCopy, 'a_texCoord'), 2, gl.FLOAT, false, 0, 0);
+    const posLocCopy = gl.getAttribLocation(programCopy, 'a_position');
+    if (posLocCopy >= 0) {
+        gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
+        gl.enableVertexAttribArray(posLocCopy);
+        gl.vertexAttribPointer(posLocCopy, 2, gl.FLOAT, false, 0, 0);
+    }
+    const texLocCopy = gl.getAttribLocation(programCopy, 'a_texCoord');
+    if (texLocCopy >= 0) {
+        gl.bindBuffer(gl.ARRAY_BUFFER, texCoordBuffer);
+        gl.enableVertexAttribArray(texLocCopy);
+        gl.vertexAttribPointer(texLocCopy, 2, gl.FLOAT, false, 0, 0);
+    }
 
     gl.bindVertexArray(null); // Unbind VAO
 }
@@ -155,7 +174,8 @@ function initWebGL() {
 }
 
 function render() {
-    if (!videoElement.readyState === videoElement.HAVE_ENOUGH_DATA) {
+    // Fixed readyState check
+    if (!videoElement || videoElement.readyState < videoElement.HAVE_ENOUGH_DATA) {
         requestAnimationFrame(render);
         return;
     }
@@ -177,6 +197,11 @@ function render() {
     // --- Step 1: Upload current video frame to currentTexture ---
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, currentTexture);
+
+    // Ensure the uploaded video pixels map upright and alpha doesn't premultiply color
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+    gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, videoElement);
 
     // --- Step 2: Render the difference ---
@@ -304,25 +329,25 @@ function render() {
 				log('No camera found on this device.');
 			}
 
-			// Try legacy fallback as last resort
-			if (!stream) {
-				try {
+				console.warn('video.play error:', e);
+			}f (!stream) {
+			log('Camera started.');
 					log('Attempting legacy getUserMedia fallback...');
-					stream = await fallbackGetUserMedia(constraints);
-				} catch (legacyErr) {
-					console.error('Legacy getUserMedia failed:', legacyErr);
-					if (!statusEl) alert('Camera error: ' + (legacyErr.message || legacyErr));
-					log('Unable to access camera. See console for details.');
-				}
-			}
-		}
+			// Initialize WebGL and start render loop oncents);
+			if (!gl) initWebGL();{
+			if (!isStarted) {Legacy getUserMedia failed:', legacyErr);
+				isStarted = true;lert('Camera error: ' + (legacyErr.message || legacyErr));
+				render();ble to access camera. See console for details.');
+			}}
+		};
+	}}
 
-		if (!stream) return;
-
+	// Wire UIam) return;
+	if (startBtn) startBtn.addEventListener('click', startWebcam);
 		// Attach and start
-		video.srcObject = stream;
-
-		// Set global videoElement so render/initWebGL can use it
+	// Optional: auto-start on page load (disabled)
+	// window.addEventListener('load', () => { /* startWebcam(); */ });
+})();Set global videoElement so render/initWebGL can use it
 		videoElement = video;
 
 		video.onloadedmetadata = async () => {
