@@ -1,11 +1,15 @@
 // --- Global Variables ---
 let videoElement;
 let gl;
+let grayscaleGl; // WebGL context for grayscale canvas
 let programDifference;
 let programCopy;
+let programGrayscale; // New grayscale program
 let currentTexture;
 let previousTexture;
+let grayscaleTexture; // Texture for grayscale canvas
 let framebuffer; // For offscreen rendering
+let grayscaleVao; // VAO for grayscale canvas
 let vao;
 let lastFrameTime = 0;
 const DELAY_MS = 1000; // 1 second delay
@@ -123,7 +127,11 @@ function preprocessShaderSource(src) {
 function initWebGL() {
     const canvas = document.getElementById('webglCanvas');
     gl = canvas.getContext('webgl2', { preserveDrawingBuffer: true }); // WebGL2 preferred
-    if (!gl) {
+    // Initialize grayscale canvas
+    const grayscaleCanvas = document.getElementById('grayscaleCanvas');
+    grayscaleGl = grayscaleCanvas.getContext('webgl2', { preserveDrawingBuffer: true });
+    
+    if (!gl || !grayscaleGl) {
         gl = canvas.getContext('webgl', { preserveDrawingBuffer: true }); // Fallback to WebGL1
         if (!gl) {
             alert('Your browser does not support WebGL!');
@@ -136,17 +144,24 @@ function initWebGL() {
     const vsSource = preprocessShaderSource(document.getElementById('vertex-shader').textContent);
     const diffFsSource = preprocessShaderSource(document.getElementById('difference-fragment-shader').textContent);
     const copyFsSource = preprocessShaderSource(document.getElementById('copy-fragment-shader').textContent);
+    const grayscaleFsSource = preprocessShaderSource(document.getElementById('grayscale-fragment-shader').textContent);
 
     const vertexShader = createShader(gl, gl.VERTEX_SHADER, vsSource);
     const differenceFragmentShader = createShader(gl, gl.FRAGMENT_SHADER, diffFsSource);
     const copyFragmentShader = createShader(gl, gl.FRAGMENT_SHADER, copyFsSource);
+    
+    // Create grayscale shader for grayscale canvas
+    const grayscaleVertexShader = createShader(grayscaleGl, grayscaleGl.VERTEX_SHADER, vsSource);
+    const grayscaleFragmentShader = createShader(grayscaleGl, grayscaleGl.FRAGMENT_SHADER, grayscaleFsSource);
 
     programDifference = createProgram(gl, vertexShader, differenceFragmentShader);
     programCopy = createProgram(gl, vertexShader, copyFragmentShader);
+    programGrayscale = createProgram(grayscaleGl, grayscaleVertexShader, grayscaleFragmentShader);
 
-    if (!programDifference || !programCopy) return;
+    if (!programDifference || !programCopy || !programGrayscale) return;
 
     setupPlane(gl);
+    setupGrayscalePlane(grayscaleGl);
 
     // Get uniform locations
     programDifference.uniforms = {
@@ -156,6 +171,13 @@ function initWebGL() {
     programCopy.uniforms = {
         image: gl.getUniformLocation(programCopy, 'u_image')
     };
+
+    // Setup grayscale program uniforms
+    grayscaleGl.useProgram(programGrayscale);
+    programGrayscale.uniforms = {
+        image: grayscaleGl.getUniformLocation(programGrayscale, 'u_image')
+    };
+    grayscaleGl.uniform1i(programGrayscale.uniforms.image, 0);
 
     // Set texture units for difference shader
     gl.useProgram(programDifference);
@@ -168,9 +190,46 @@ function initWebGL() {
     // Initial textures (will be updated with video dimensions)
     currentTexture = createTexture(gl, 1, 1); // Placeholder
     previousTexture = createTexture(gl, 1, 1); // Placeholder
+    grayscaleTexture = createTexture(grayscaleGl, 1, 1); // Placeholder
 
     // Create a framebuffer for offscreen rendering (to copy current to previous)
     framebuffer = gl.createFramebuffer();
+}
+
+function setupGrayscalePlane(gl) {
+    const positions = new Float32Array([
+        -1, -1, 1, -1, -1, 1, -1, 1, 1, -1, 1, 1
+    ]);
+    const texCoords = new Float32Array([
+        0, 0, 1, 0, 0, 1, 0, 1, 1, 0, 1, 1
+    ]);
+
+    grayscaleVao = gl.createVertexArray();
+    gl.bindVertexArray(grayscaleVao);
+
+    const positionBuffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, positions, gl.STATIC_DRAW);
+
+    const texCoordBuffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, texCoordBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, texCoords, gl.STATIC_DRAW);
+
+    gl.useProgram(programGrayscale);
+    const posLoc = gl.getAttribLocation(programGrayscale, 'a_position');
+    if (posLoc >= 0) {
+        gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
+        gl.enableVertexAttribArray(posLoc);
+        gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0);
+    }
+    const texLoc = gl.getAttribLocation(programGrayscale, 'a_texCoord');
+    if (texLoc >= 0) {
+        gl.bindBuffer(gl.ARRAY_BUFFER, texCoordBuffer);
+        gl.enableVertexAttribArray(texLoc);
+        gl.vertexAttribPointer(texLoc, 2, gl.FLOAT, false, 0, 0);
+    }
+
+    gl.bindVertexArray(null);
 }
 
 function render() {
@@ -180,7 +239,7 @@ function render() {
         return;
     }
 
-    // Adjust canvas size to match video aspect ratio
+    // Adjust canvas sizes
     const videoWidth = videoElement.videoWidth;
     const videoHeight = videoElement.videoHeight;
 
@@ -188,10 +247,16 @@ function render() {
         gl.canvas.width = videoWidth;
         gl.canvas.height = videoHeight;
         gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
+        
+        // Also resize grayscale canvas
+        grayscaleGl.canvas.width = videoWidth;
+        grayscaleGl.canvas.height = videoHeight;
+        grayscaleGl.viewport(0, 0, grayscaleGl.canvas.width, grayscaleGl.canvas.height);
 
         // Re-create textures with correct dimensions
         currentTexture = createTexture(gl, videoWidth, videoHeight);
         previousTexture = createTexture(gl, videoWidth, videoHeight);
+        grayscaleTexture = createTexture(grayscaleGl, videoWidth, videoHeight);
     }
 
     // --- Step 1: Upload current video frame to currentTexture ---
@@ -203,6 +268,21 @@ function render() {
     gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
 
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, videoElement);
+
+    // --- Step 1.5: Render grayscale to grayscale canvas ---
+    grayscaleGl.activeTexture(grayscaleGl.TEXTURE0);
+    grayscaleGl.bindTexture(grayscaleGl.TEXTURE_2D, grayscaleTexture);
+    grayscaleGl.pixelStorei(grayscaleGl.UNPACK_FLIP_Y_WEBGL, true);
+    grayscaleGl.pixelStorei(grayscaleGl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+    grayscaleGl.texImage2D(grayscaleGl.TEXTURE_2D, 0, grayscaleGl.RGBA, grayscaleGl.RGBA, grayscaleGl.UNSIGNED_BYTE, videoElement);
+
+    grayscaleGl.bindFramebuffer(grayscaleGl.FRAMEBUFFER, null);
+    grayscaleGl.useProgram(programGrayscale);
+    grayscaleGl.activeTexture(grayscaleGl.TEXTURE0);
+    grayscaleGl.bindTexture(grayscaleGl.TEXTURE_2D, grayscaleTexture);
+    grayscaleGl.bindVertexArray(grayscaleVao);
+    grayscaleGl.drawArrays(grayscaleGl.TRIANGLES, 0, 6);
+    grayscaleGl.bindVertexArray(null);
 
     // --- Step 2: Render the difference ---
     gl.bindFramebuffer(gl.FRAMEBUFFER, null); // Render to canvas
