@@ -24,6 +24,7 @@ background: linear-gradient(to right, #4286f4, #373B44); /* W3C, IE 10+/ Edge, F
             justify-content: center; 
             align-items: top; 
             padding: 20px; 
+            flex-direction: column;
         }
         
         #rightColumn { 
@@ -35,7 +36,7 @@ background: linear-gradient(to right, #4286f4, #373B44); /* W3C, IE 10+/ Edge, F
         }
         
         #webglCanvas { 
-            border: 1px solid #555; 
+            border: 1px solid #2f0974;; 
             max-width: 100%; 
             max-height: 100%; 
         }
@@ -55,7 +56,7 @@ background: linear-gradient(to right, #4286f4, #373B44); /* W3C, IE 10+/ Edge, F
         }
         
         #grayscaleCanvas { 
-            border: 1px solid #555; 
+            border: 1px solid #2f0974;; 
             width: 100%; 
             height: 33%; 
         }
@@ -67,15 +68,15 @@ background: linear-gradient(to right, #4286f4, #373B44); /* W3C, IE 10+/ Edge, F
         }
         
         #footer { 
+            box-sizing: border-box;
             position: fixed; 
-            bottom: 8px; 
-            left: 8px; 
+            bottom: 0px; 
             z-index: 10; 
             color: #fff; 
             font-family: monospace; 
             border-top: 3px solid #2f0974;; 
             padding: 12px 16px; 
-            width: calc(100% - 16px - 32px); 
+            width: 100%;
             height: 26px; 
             display: flex; 
             justify-content: space-between; 
@@ -92,12 +93,21 @@ background: linear-gradient(to right, #4286f4, #373B44); /* W3C, IE 10+/ Edge, F
             align-items: center; 
             gap: 10px; 
         }
+        #parameters{
+            padding-top: 5px;
+            border-top: 1px solid #2f0974
+        }
     </style>
 </head>
 <body>
     <div id="mainContainer">
         <div id="leftColumn">
+            <h1 style="color: #fff; text-align: center;">Webcam Difference Detection</h1>
             <canvas id="webglCanvas"></canvas>
+            <div id="parameters">
+                Delay: <input type="number" id="delayInput" value="1000">
+            </div>
+            
         </div>
         
         <div id="rightColumn">
@@ -113,6 +123,7 @@ background: linear-gradient(to right, #4286f4, #373B44); /* W3C, IE 10+/ Edge, F
     
     <div id="footer">
         <span>Demo Vision System for Demonstration</span>
+        <button id="toggleFilterBtn">Switch Input Chain</button>
         <div id="controls">
             <button id="startBtn">Start Camera</button>
             <span id="status"></span>
@@ -182,6 +193,84 @@ background: linear-gradient(to right, #4286f4, #373B44); /* W3C, IE 10+/ Edge, F
             
             // Output as grayscale
             fragColor = vec4(vec3(gray), 1.0);
+        }
+    </script>
+    <script>
+    /**
+     * Adds a new fragment shader for Gaussian Laplacian of Gaussian (LoG) filtering.
+     * This kernel will be used to filter the grayscale image.
+     */
+    const gaussianLogFragmentShaderSource = `#version 300 es
+    precision mediump float;
+    uniform sampler2D u_image;
+    uniform vec2 u_texelSize;
+    in vec2 v_texCoord;
+    out vec4 fragColor;
+
+    // 5x5 LoG kernel, sigma ~1.0
+    const float kernel[25] = float[](
+        0,   0,  -1,   0,  0,
+        0,  -1,  -2,  -1,  0,
+        -1,  -2,  16,  -2, -1,
+        0,  -1,  -2,  -1,  0,
+        0,   0,  -1,   0,  0
+    );
+
+    void main() {
+        vec2 texOffset = u_texelSize; // 1.0 / texture size
+        vec3 sum = vec3(0.0);
+        int k = 0;
+        for (int y = -2; y <= 2; ++y) {
+           for (int x = -2; x <= 2; ++x) {
+              vec2 offset = vec2(float(x), float(y)) * texOffset;
+              vec3 color = texture(u_image, v_texCoord + offset).rgb;
+              sum += color * kernel[k];
+              k++;
+           }
+        }
+        // Clamp to [0,1] for display
+        float v = clamp(sum.r, 0.0, 1.0);
+        fragColor = vec4(vec3(v), 1.0);
+    }
+    `;
+
+    // You can now use `gaussianLogFragmentShaderSource` to create a WebGL shader program
+    // and apply it to your grayscale image as needed.
+    </script>
+
+    <script id="laplacian-gaussian-fragment-shader" type="x-shader/x-fragment">
+        #version 300 es
+        precision mediump float;
+        uniform sampler2D u_image;
+        uniform vec2 u_resolution;
+        in vec2 v_texCoord;
+        out vec4 fragColor;
+
+        void main() {
+            vec2 onePixel = vec2(1.0) / u_resolution;
+            
+            // Laplacian of Gaussian (LoG) filter kernel
+            // This is a 5x5 approximation of LoG
+            float kernel[25];
+            kernel[0] = 0.0; kernel[1] = 0.0; kernel[2] = -1.0; kernel[3] = 0.0; kernel[4] = 0.0;
+            kernel[5] = 0.0; kernel[6] = -1.0; kernel[7] = -2.0; kernel[8] = -1.0; kernel[9] = 0.0;
+            kernel[10] = -1.0; kernel[11] = -2.0; kernel[12] = 16.0; kernel[13] = -2.0; kernel[14] = -1.0;
+            kernel[15] = 0.0; kernel[16] = -1.0; kernel[17] = -2.0; kernel[18] = -1.0; kernel[19] = 0.0;
+            kernel[20] = 0.0; kernel[21] = 0.0; kernel[22] = -1.0; kernel[23] = 0.0; kernel[24] = 0.0;
+            
+            vec4 colorSum = vec4(0.0);
+            
+            for(int i = 0; i < 5; i++) {
+                for(int j = 0; j < 5; j++) {
+                    vec2 offset = vec2(float(i - 2), float(j - 2)) * onePixel;
+                    vec4 color = texture(u_image, v_texCoord + offset);
+                    colorSum += color * kernel[i * 5 + j];
+                }
+            }
+            
+            // Normalize and enhance the result
+            colorSum = abs(colorSum);
+            fragColor = vec4(colorSum.rgb, 1.0);
         }
     </script>
 

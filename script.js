@@ -2,18 +2,23 @@
 let videoElement;
 let gl;
 let grayscaleGl; // WebGL context for grayscale canvas
+let detectionGl; // WebGL context for detection canvas
 let programDifference;
 let programCopy;
 let programGrayscale; // New grayscale program
+let programLaplacianGaussian; // LoG filter program
 let currentTexture;
 let previousTexture;
 let grayscaleTexture; // Texture for grayscale canvas
+let detectionTexture; // Texture for detection canvas
 let framebuffer; // For offscreen rendering
 let grayscaleVao; // VAO for grayscale canvas
+let detectionVao; // VAO for detection canvas
 let vao;
 let lastFrameTime = 0;
-const DELAY_MS = 1000; // 1 second delay
+let DELAY_MS = 1000; // 1 second delay
 let isStarted = false; // Added: prevent multiple starts
+let useGrayscaleForDetection = true; // New: toggle between grayscale and difference input
 
 // --- Helper Functions (Simplified) ---
 function createShader(gl, type, source) {
@@ -130,8 +135,11 @@ function initWebGL() {
     // Initialize grayscale canvas
     const grayscaleCanvas = document.getElementById('grayscaleCanvas');
     grayscaleGl = grayscaleCanvas.getContext('webgl2', { preserveDrawingBuffer: true });
+    // Initialize detection canvas
+    const detectionCanvas = document.getElementById('detectionCanvas');
+    detectionGl = detectionCanvas.getContext('webgl2', { preserveDrawingBuffer: true });
     
-    if (!gl || !grayscaleGl) {
+    if (!gl || !grayscaleGl || !detectionGl) {
         gl = canvas.getContext('webgl', { preserveDrawingBuffer: true }); // Fallback to WebGL1
         if (!gl) {
             alert('Your browser does not support WebGL!');
@@ -145,6 +153,7 @@ function initWebGL() {
     const diffFsSource = preprocessShaderSource(document.getElementById('difference-fragment-shader').textContent);
     const copyFsSource = preprocessShaderSource(document.getElementById('copy-fragment-shader').textContent);
     const grayscaleFsSource = preprocessShaderSource(document.getElementById('grayscale-fragment-shader').textContent);
+    const logFsSource = preprocessShaderSource(document.getElementById('laplacian-gaussian-fragment-shader').textContent);
 
     const vertexShader = createShader(gl, gl.VERTEX_SHADER, vsSource);
     const differenceFragmentShader = createShader(gl, gl.FRAGMENT_SHADER, diffFsSource);
@@ -154,14 +163,20 @@ function initWebGL() {
     const grayscaleVertexShader = createShader(grayscaleGl, grayscaleGl.VERTEX_SHADER, vsSource);
     const grayscaleFragmentShader = createShader(grayscaleGl, grayscaleGl.FRAGMENT_SHADER, grayscaleFsSource);
 
+    // Create LoG shader for detection canvas
+    const detectionVertexShader = createShader(detectionGl, detectionGl.VERTEX_SHADER, vsSource);
+    const logFragmentShader = createShader(detectionGl, detectionGl.FRAGMENT_SHADER, logFsSource);
+
     programDifference = createProgram(gl, vertexShader, differenceFragmentShader);
     programCopy = createProgram(gl, vertexShader, copyFragmentShader);
     programGrayscale = createProgram(grayscaleGl, grayscaleVertexShader, grayscaleFragmentShader);
+    programLaplacianGaussian = createProgram(detectionGl, detectionVertexShader, logFragmentShader);
 
-    if (!programDifference || !programCopy || !programGrayscale) return;
+    if (!programDifference || !programCopy || !programGrayscale || !programLaplacianGaussian) return;
 
     setupPlane(gl);
     setupGrayscalePlane(grayscaleGl);
+    setupDetectionPlane(detectionGl);
 
     // Get uniform locations
     programDifference.uniforms = {
@@ -179,6 +194,14 @@ function initWebGL() {
     };
     grayscaleGl.uniform1i(programGrayscale.uniforms.image, 0);
 
+    // Setup detection program uniforms
+    detectionGl.useProgram(programLaplacianGaussian);
+    programLaplacianGaussian.uniforms = {
+        image: detectionGl.getUniformLocation(programLaplacianGaussian, 'u_image'),
+        resolution: detectionGl.getUniformLocation(programLaplacianGaussian, 'u_resolution')
+    };
+    detectionGl.uniform1i(programLaplacianGaussian.uniforms.image, 0);
+
     // Set texture units for difference shader
     gl.useProgram(programDifference);
     gl.uniform1i(programDifference.uniforms.imageA, 0); // Texture unit 0
@@ -191,6 +214,7 @@ function initWebGL() {
     currentTexture = createTexture(gl, 1, 1); // Placeholder
     previousTexture = createTexture(gl, 1, 1); // Placeholder
     grayscaleTexture = createTexture(grayscaleGl, 1, 1); // Placeholder
+    detectionTexture = createTexture(detectionGl, 1, 1); // Placeholder
 
     // Create a framebuffer for offscreen rendering (to copy current to previous)
     framebuffer = gl.createFramebuffer();
@@ -232,6 +256,42 @@ function setupGrayscalePlane(gl) {
     gl.bindVertexArray(null);
 }
 
+function setupDetectionPlane(gl) {
+    const positions = new Float32Array([
+        -1, -1, 1, -1, -1, 1, -1, 1, 1, -1, 1, 1
+    ]);
+    const texCoords = new Float32Array([
+        0, 0, 1, 0, 0, 1, 0, 1, 1, 0, 1, 1
+    ]);
+
+    detectionVao = gl.createVertexArray();
+    gl.bindVertexArray(detectionVao);
+
+    const positionBuffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, positions, gl.STATIC_DRAW);
+
+    const texCoordBuffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, texCoordBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, texCoords, gl.STATIC_DRAW);
+
+    gl.useProgram(programLaplacianGaussian);
+    const posLoc = gl.getAttribLocation(programLaplacianGaussian, 'a_position');
+    if (posLoc >= 0) {
+        gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
+        gl.enableVertexAttribArray(posLoc);
+        gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0);
+    }
+    const texLoc = gl.getAttribLocation(programLaplacianGaussian, 'a_texCoord');
+    if (texLoc >= 0) {
+        gl.bindBuffer(gl.ARRAY_BUFFER, texCoordBuffer);
+        gl.enableVertexAttribArray(texLoc);
+        gl.vertexAttribPointer(texLoc, 2, gl.FLOAT, false, 0, 0);
+    }
+
+    gl.bindVertexArray(null);
+}
+
 function render() {
     // Fixed readyState check
     if (!videoElement || videoElement.readyState < videoElement.HAVE_ENOUGH_DATA) {
@@ -253,10 +313,16 @@ function render() {
         grayscaleGl.canvas.height = videoHeight;
         grayscaleGl.viewport(0, 0, grayscaleGl.canvas.width, grayscaleGl.canvas.height);
 
+        // Also resize detection canvas
+        detectionGl.canvas.width = videoWidth;
+        detectionGl.canvas.height = videoHeight;
+        detectionGl.viewport(0, 0, detectionGl.canvas.width, detectionGl.canvas.height);
+
         // Re-create textures with correct dimensions
         currentTexture = createTexture(gl, videoWidth, videoHeight);
         previousTexture = createTexture(gl, videoWidth, videoHeight);
         grayscaleTexture = createTexture(grayscaleGl, videoWidth, videoHeight);
+        detectionTexture = createTexture(detectionGl, videoWidth, videoHeight);
     }
 
     // --- Step 1: Upload current video frame to currentTexture ---
@@ -284,17 +350,59 @@ function render() {
     grayscaleGl.drawArrays(grayscaleGl.TRIANGLES, 0, 6);
     grayscaleGl.bindVertexArray(null);
 
-    // --- Step 2: Render the difference ---
-    gl.bindFramebuffer(gl.FRAMEBUFFER, null); // Render to canvas
-    gl.useProgram(programDifference);
-    gl.activeTexture(gl.TEXTURE0); // Current frame
-    gl.bindTexture(gl.TEXTURE_2D, currentTexture);
-    gl.activeTexture(gl.TEXTURE1); // Previous frame
-    gl.bindTexture(gl.TEXTURE_2D, previousTexture);
+    // --- Step 1.6: Apply LoG filter to either grayscale or difference and render to detection canvas ---
+    let inputPixels;
+    
+    if (useGrayscaleForDetection) {
+        // Use grayscale output as input for LoG filter
+        inputPixels = new Uint8Array(videoWidth * videoHeight * 4);
+        grayscaleGl.readPixels(0, 0, videoWidth, videoHeight, grayscaleGl.RGBA, grayscaleGl.UNSIGNED_BYTE, inputPixels);
+    } else {
+        // Use difference output as input for LoG filter
+        // First render the difference to get the pixels
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        gl.useProgram(programDifference);
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, currentTexture);
+        gl.activeTexture(gl.TEXTURE1);
+        gl.bindTexture(gl.TEXTURE_2D, previousTexture);
+        gl.bindVertexArray(vao);
+        gl.drawArrays(gl.TRIANGLES, 0, 6);
+        gl.bindVertexArray(null);
+        
+        // Read the difference pixels
+        inputPixels = new Uint8Array(videoWidth * videoHeight * 4);
+        gl.readPixels(0, 0, videoWidth, videoHeight, gl.RGBA, gl.UNSIGNED_BYTE, inputPixels);
+    }
+    
+    // Upload the selected input to detection texture
+    detectionGl.activeTexture(detectionGl.TEXTURE0);
+    detectionGl.bindTexture(detectionGl.TEXTURE_2D, detectionTexture);
+    detectionGl.pixelStorei(detectionGl.UNPACK_FLIP_Y_WEBGL, false);
+    detectionGl.texImage2D(detectionGl.TEXTURE_2D, 0, detectionGl.RGBA, videoWidth, videoHeight, 0, detectionGl.RGBA, detectionGl.UNSIGNED_BYTE, inputPixels);
 
-    gl.bindVertexArray(vao);
-    gl.drawArrays(gl.TRIANGLES, 0, 6);
-    gl.bindVertexArray(null);
+    // Apply LoG filter
+    detectionGl.bindFramebuffer(detectionGl.FRAMEBUFFER, null);
+    detectionGl.useProgram(programLaplacianGaussian);
+    detectionGl.uniform2f(programLaplacianGaussian.uniforms.resolution, videoWidth, videoHeight);
+    detectionGl.activeTexture(detectionGl.TEXTURE0);
+    detectionGl.bindTexture(detectionGl.TEXTURE_2D, detectionTexture);
+    detectionGl.bindVertexArray(detectionVao);
+    detectionGl.drawArrays(detectionGl.TRIANGLES, 0, 6);
+    detectionGl.bindVertexArray(null);
+
+    // --- Step 2: Render the difference (if using grayscale for detection) ---
+    if (useGrayscaleForDetection) {
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        gl.useProgram(programDifference);
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, currentTexture);
+        gl.activeTexture(gl.TEXTURE1);
+        gl.bindTexture(gl.TEXTURE_2D, previousTexture);
+        gl.bindVertexArray(vao);
+        gl.drawArrays(gl.TRIANGLES, 0, 6);
+        gl.bindVertexArray(null);
+    }
 
     // --- Step 3: Handle the 1-second delay for the 'previous' frame ---
     const currentTime = performance.now();
@@ -448,6 +556,32 @@ function render() {
 	// Wire UI
 	if (startBtn) startBtn.addEventListener('click', startWebcam);
 
-	// Optional: auto-start on page load (disabled)
-	// window.addEventListener('load', () => { /* startWebcam(); */ });
+	// Add toggle button functionality
+	const toggleBtn = document.getElementById('toggleFilterBtn');
+    if (toggleBtn) {
+        toggleBtn.addEventListener('click', () => {
+            useGrayscaleForDetection = !useGrayscaleForDetection;
+            toggleBtn.textContent = useGrayscaleForDetection ? 
+                'Switch to Difference Input' : 
+                'Switch to Grayscale Input';
+            console.log('Filter input switched to:', useGrayscaleForDetection ? 'Grayscale' : 'Difference');
+        });
+        
+        // Set initial button text
+        toggleBtn.textContent = 'Switch to Difference Input';
+    }
+
+    const delayInput = document.getElementById('delayInput');
+    if (delayInput) {
+        delayInput.addEventListener('input', () => {
+            const delay = parseInt(delayInput.value, 10);
+            if (!isNaN(delay)) {
+                DELAY_MS = delay;
+                console.log('Processing delay set to:', DELAY_MS, 'ms');
+            }
+        });
+    }
+
+    // Optional: auto-start on page load (disabled)
+    // window.addEventListener('load', () => { /* startWebcam(); */ });
 })();
