@@ -565,6 +565,7 @@ function render() {
                 'Switch to Difference Input' : 
                 'Switch to Grayscale Input';
             console.log('Filter input switched to:', useGrayscaleForDetection ? 'Grayscale' : 'Difference');
+        
         });
         
         // Set initial button text
